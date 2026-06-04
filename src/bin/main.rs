@@ -7,24 +7,37 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
-use bt_hci::controller::ExternalController;
 use defmt::info;
 use embassy_executor::Spawner;
-use embassy_time::{Duration, Timer};
+use embassy_net::StackResources;
+use embassy_time::Timer;
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
-use esp_radio::ble::controller::BleConnector;
+use esp_radio::wifi::ControllerConfig;
+use esp_radio::wifi::scan::ScanConfig;
+use esp_radio::wifi::sta::StationConfig;
 use panic_rtt_target as _;
-use trouble_host::prelude::*;
-
 extern crate alloc;
 
-const CONNECTIONS_MAX: usize = 1;
-const L2CAP_CHANNELS_MAX: usize = 1;
+macro_rules! mk_static {
+    ($t:ty,$val:expr) => {{
+        static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
+        #[deny(unused_attributes)]
+        let x = STATIC_CELL.uninit().write(($val));
+        x
+    }};
+}
+
+use garden_esp::connection::{connection, net_task};
+use garden_esp::led::setup_led;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
 // For more information see: <https://docs.espressif.com/projects/esp-idf/en/stable/esp32/api-reference/system/app_image_format.html#application-description>
 esp_bootloader_esp_idf::esp_app_desc!();
+
+// Put these in an .env file. See .env.example for an example.
+const SSID: &str = env!("SSID");
+const PASSWORD: &str = env!("PASSWORD");
 
 #[allow(
     clippy::large_stack_frames,
@@ -65,22 +78,62 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Embassy initialized!");
 
-    let (mut _wifi_controller, _interfaces) =
-        esp_radio::wifi::new(peripherals.WIFI, Default::default())
-            .expect("Failed to initialize Wi-Fi controller");
-    // find more examples https://github.com/embassy-rs/trouble/tree/main/examples/esp32
-    let transport = BleConnector::new(peripherals.BT, Default::default()).unwrap();
-    let ble_controller = ExternalController::<_, 1>::new(transport);
-    let mut resources: HostResources<DefaultPacketPool, CONNECTIONS_MAX, L2CAP_CHANNELS_MAX> =
-        HostResources::new();
-    let _stack = trouble_host::new(ble_controller, &mut resources);
+    let station_config = esp_radio::wifi::Config::Station(
+        StationConfig::default()
+            .with_ssid(SSID)
+            .with_password(PASSWORD.into()),
+    );
 
-    // TODO: Spawn some tasks
-    let _ = spawner;
+    info!("Initializing Wi-Fi controller...");
+    let (mut wifi_controller, interfaces) = esp_radio::wifi::new(
+        peripherals.WIFI,
+        ControllerConfig::default().with_initial_config(station_config),
+    )
+    .expect("Failed to initialize Wi-Fi controller");
+    info!("Wi-Fi controller initialized!");
+
+    let wifi_interface = interfaces.station;
+    let dhcp_config = embassy_net::Config::dhcpv4(Default::default());
+
+    let rng = esp_hal::rng::Rng::new();
+    let seed = (rng.random() as u64) << 32 | (rng.random() as u64);
+
+    let (stack, runner) = embassy_net::new(
+        wifi_interface,
+        dhcp_config,
+        mk_static!(StackResources<3>, StackResources::<3>::new()),
+        seed,
+    );
+
+    info!("Scanning for Wi-Fi networks...");
+    let scan_config = ScanConfig::default().with_max(10); // max = max # of networks to return
+    let scan_results = wifi_controller
+        .scan_async(&scan_config)
+        .await
+        .expect("Failed to scan for Wi-Fi networks");
+    if scan_results.is_empty() {
+        info!("No Wi-Fi networks found");
+    }
+    for ap in scan_results {
+        let ssid = core::str::from_utf8(ap.ssid.as_str().as_bytes()).expect("<invalid ssid>");
+        info!("Found Wi-Fi network: AP info: {:?}", ssid);
+    }
+
+    spawner.spawn(connection(wifi_controller).expect("Failed to spawn connection task"));
+    spawner.spawn(net_task(runner).expect("Failed to spawn net task"));
+
+    stack.wait_config_up().await;
+
+    // on-board led
+    let mut led = setup_led(peripherals.GPIO8.into()).await;
 
     loop {
-        info!("Hello world!");
-        Timer::after(Duration::from_secs(1)).await;
+        info!("Blinking LED...");
+        // blink esp32c3 onboard led every second
+        led.set_high();
+        Timer::after(embassy_time::Duration::from_millis(500)).await;
+        led.set_low();
+        Timer::after(embassy_time::Duration::from_millis(500)).await;
     }
 
     // for inspiration have a look at the examples at https://github.com/esp-rs/esp-hal/tree/esp-hal-v1.1.0/examples

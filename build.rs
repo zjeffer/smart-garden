@@ -1,5 +1,8 @@
 fn main() {
     linker_be_nice();
+    // Load optional .env file so developers can set SSID/PASSWORD locally.
+    // This uses a tiny, dependency-free parser to avoid adding build-deps.
+    load_dotenv();
     println!("cargo:rustc-link-arg-tests=-Tembedded-test.x");
     println!("cargo:rustc-link-arg=-Tdefmt.x");
     // make sure linkall.x is the last linker script (otherwise might cause problems with flip-link)
@@ -69,4 +72,50 @@ fn linker_be_nice() {
         "cargo:rustc-link-arg=--error-handling-script={}",
         std::env::current_exe().unwrap().display()
     );
+}
+
+fn load_dotenv() {
+    use std::fs::File;
+    use std::io::{BufRead, BufReader};
+
+    let path = ".env";
+    let file = match File::open(path) {
+        Ok(f) => f,
+        Err(_) => return, // no .env file is fine
+    };
+
+    let reader = BufReader::new(file);
+    for line in reader.lines().flatten() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        if let Some((k, v)) = parse_env_line(line) {
+            // Only export SSID and PASSWORD to the compiler environment
+            match k {
+                "SSID" | "PASSWORD" => println!("cargo:rustc-env={}={}", k, v),
+                _ => (),
+            }
+        }
+    }
+}
+
+fn parse_env_line(s: &str) -> Option<(&str, String)> {
+    // accept KEY=VALUE, allowing quoted values and trimming whitespace
+    let mut parts = s.splitn(2, '=');
+    let key = parts.next()?.trim();
+    let raw = parts.next()?.trim();
+    if key.is_empty() {
+        return None;
+    }
+
+    let val = if raw.starts_with('"') && raw.ends_with('"') && raw.len() >= 2 {
+        raw[1..raw.len() - 1].to_string()
+    } else if raw.starts_with('\'') && raw.ends_with('\'') && raw.len() >= 2 {
+        raw[1..raw.len() - 1].to_string()
+    } else {
+        raw.to_string()
+    };
+
+    Some((key, val))
 }
