@@ -1,8 +1,8 @@
 [package]
-edition      = "2024"
-name         = "garden-esp"
+edition = "2024"
+name = "garden-esp"
 rust-version = "1.88"
-version      = "0.1.0"
+version = "0.1.0"
 
 [[bin]]
 name = "garden-esp"
@@ -11,7 +11,7 @@ test = false
 
 [[test]]
 harness = false
-name    = "hello_test"
+name = "hello_test"
 
 [lib]
 test = false
@@ -27,7 +27,7 @@ esp-rtos = { version = "0.3.0", features = [
   "esp32c3",
 ] }
 
-defmt                  = "1.0.1"
+defmt = "1.0.1"
 esp-bootloader-esp-idf = { version = "0.5.0", features = ["defmt", "esp32c3"] }
 
 embassy-net = { version = "0.9.1", features = [
@@ -71,7 +71,8 @@ smoltcp = { version = "0.13.0", default-features = false, features = [
 trouble-host = { version = "0.6.0", features = ["gatt"] }
 
 critical-section = "1.2.0"
-static_cell      = "2.1.1"
+static_cell = "2.1.1"
+onewire = { version = "0.4.0", features = ["defmt"] }
 
 [dev-dependencies]
 embedded-test = { version = "0.7.1", features = [
@@ -87,7 +88,7 @@ embedded-test = { version = "0.7.1", features = [
 opt-level = "s"
 
 [profile.release]
-codegen-units = 1     # LLVM can perform better optimizations using a single thread
-debug         = 2     # prefer slower builds but better debugging experience
-lto           = 'fat'
-opt-level     = 's'
+codegen-units = 1 # LLVM can perform better optimizations using a single thread
+debug = 2         # prefer slower builds but better debugging experience
+lto = 'fat'
+opt-level = 's'

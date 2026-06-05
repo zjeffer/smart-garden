@@ -7,15 +7,15 @@
 )]
 #![deny(clippy::large_stack_frames)]
 
-use defmt::info;
+use defmt::{info, warn};
 use embassy_executor::Spawner;
 use embassy_net::StackResources;
 use embassy_time::Timer;
 use esp_hal::clock::CpuClock;
 use esp_hal::timer::timg::TimerGroup;
 use esp_radio::wifi::ControllerConfig;
-use esp_radio::wifi::scan::ScanConfig;
 use esp_radio::wifi::sta::StationConfig;
+use garden_esp::temperature;
 use panic_rtt_target as _;
 extern crate alloc;
 
@@ -28,7 +28,7 @@ macro_rules! mk_static {
     }};
 }
 
-use garden_esp::connection::{connection, net_task};
+use garden_esp::connection::{connection, net_task, scan_networks};
 use garden_esp::led::setup_led;
 
 // This creates a default app-descriptor required by the esp-idf bootloader.
@@ -38,6 +38,7 @@ esp_bootloader_esp_idf::esp_app_desc!();
 // Put these in an .env file. See .env.example for an example.
 const SSID: &str = env!("SSID");
 const PASSWORD: &str = env!("PASSWORD");
+const TX_POWER: i8 = 50; // my esp32c3 doesn't work with the default (whatever that is), 50 works great.
 
 #[allow(
     clippy::large_stack_frames,
@@ -105,31 +106,46 @@ async fn main(spawner: Spawner) -> ! {
         seed,
     );
 
-    info!("Scanning for Wi-Fi networks...");
-    let scan_config = ScanConfig::default().with_max(10); // max = max # of networks to return
-    let scan_results = wifi_controller
-        .scan_async(&scan_config)
-        .await
-        .expect("Failed to scan for Wi-Fi networks");
-    if scan_results.is_empty() {
-        info!("No Wi-Fi networks found");
-    }
-    for ap in scan_results {
-        let ssid = core::str::from_utf8(ap.ssid.as_str().as_bytes()).expect("<invalid ssid>");
-        info!("Found Wi-Fi network: AP info: {:?}", ssid);
-    }
+    // required for one of my esp32's to be able to connect to wifi reliably
+    wifi_controller
+        .set_max_tx_power(TX_POWER)
+        .expect("Failed to set max tx power");
+
+    scan_networks(&mut wifi_controller).await;
 
     spawner.spawn(connection(wifi_controller).expect("Failed to spawn connection task"));
     spawner.spawn(net_task(runner).expect("Failed to spawn net task"));
 
+    // will block until we have an IP address
     stack.wait_config_up().await;
+
+    // print ip address
+    let config = stack.config_v4();
+    if let Some(config) = config {
+        info!("Got IP address: {}", config.address);
+    } else {
+        warn!("No IPv4 address configured");
+    }
+
+    // now that we have a connection, start reading the temperature sensor
+    let mut data_pin = esp_hal::gpio::Flex::<'static>::new(peripherals.GPIO4);
+    data_pin.apply_output_config(
+        &esp_hal::gpio::OutputConfig::default()
+            .with_drive_mode(esp_hal::gpio::DriveMode::OpenDrain),
+    );
+    data_pin.set_output_enable(true);
+    data_pin.set_input_enable(true);
+    let wire = onewire::OneWire::new(data_pin, false);
+    spawner.spawn(
+        temperature::read_temperature_sensor(wire)
+            .expect("Failed to spawn temperature sensor task"),
+    );
 
     // on-board led
     let mut led = setup_led(peripherals.GPIO8.into()).await;
 
     loop {
-        info!("Blinking LED...");
-        // blink esp32c3 onboard led every second
+        // blink esp32c3 onboard led
         led.set_high();
         Timer::after(embassy_time::Duration::from_millis(500)).await;
         led.set_low();
