@@ -93,7 +93,13 @@ fn load_dotenv() {
         if let Some((k, v)) = parse_env_line(line) {
             // Only export SSID and PASSWORD to the compiler environment
             match k {
-                "SSID" | "PASSWORD" => println!("cargo:rustc-env={}={}", k, v),
+                "SSID"
+                | "PASSWORD"
+                | "TOPIC_GROUND_TEMPERATURE"
+                | "MQTT_BROKER_HOST"
+                | "MQTT_BROKER_PORT"
+                | "MQTT_BROKER_USERNAME"
+                | "MQTT_BROKER_PASSWORD" => println!("cargo:rustc-env={}={}", k, v),
                 _ => (),
             }
         }

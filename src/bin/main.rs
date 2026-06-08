@@ -23,8 +23,7 @@ macro_rules! mk_static {
     ($t:ty,$val:expr) => {{
         static STATIC_CELL: static_cell::StaticCell<$t> = static_cell::StaticCell::new();
         #[deny(unused_attributes)]
-        let x = STATIC_CELL.uninit().write(($val));
-        x
+        STATIC_CELL.uninit().write($val)
     }};
 }
 
@@ -129,8 +128,7 @@ async fn main(spawner: Spawner) -> ! {
     }
 
     // spawn mqtt task (placeholder for now)
-    spawner
-        .spawn(garden_esp::mqtt::mqtt_task(stack).expect("Failed to spawn mqtt task"));
+    spawner.spawn(garden_esp::mqtt::mqtt_task(stack).expect("Failed to spawn mqtt task"));
 
     // now that we have a connection, start reading the temperature sensor
     let mut data_pin = esp_hal::gpio::Flex::<'static>::new(peripherals.GPIO4);
