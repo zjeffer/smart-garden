@@ -30,10 +30,7 @@ static MQTT_TCP_TX_CELL: static_cell::StaticCell<[u8; 1536]> = static_cell::Stat
 
 const TOPIC_GROUND_TEMPERATURE: &str = "garden/ground_temperature";
 
-const BROKER_HOST: &str = env!("MQTT_BROKER_HOST");
-const PORT: &str = env!("MQTT_BROKER_PORT");
-const MQTT_USERNAME: &str = env!("MQTT_BROKER_USERNAME");
-const MQTT_PASSWORD: &str = env!("MQTT_BROKER_PASSWORD");
+// Use `option_env!` at call sites so these values are optional at compile time.
 
 /// Try to connect to the broker and publish a retained discovery message,
 /// then return. This is `async` so the caller can spawn it as a task.
@@ -53,25 +50,32 @@ pub async fn mqtt_task(stack: Stack<'static>) {
     let mut client: Client<'_, MqttTransport<'static>, AllocBuffer, 1, 16, 16, 4> =
         Client::new(&mut buffer);
     let mut connected = false;
+    // Read optional compile-time env vars set via `build.rs` or the environment.
+    let broker_host_opt = option_env!("MQTT_BROKER_HOST");
+    let port_opt = option_env!("MQTT_BROKER_PORT");
+    let username_opt = option_env!("MQTT_BROKER_USERNAME");
+    let password_opt = option_env!("MQTT_BROKER_PASSWORD");
 
-    // Initialize static cell backed buffers. `uninit().write(...)` returns
-    // a `&'static mut [u8; 1536]` which coerces to `&'static mut [u8]`.
-    let rx_buf: &'static mut [u8] = MQTT_TCP_RX_CELL.uninit().write([0u8; 1536]);
-    let tx_buf: &'static mut [u8] = MQTT_TCP_TX_CELL.uninit().write([0u8; 1536]);
+    if let Some(broker_host) = broker_host_opt {
+        // Initialize static cell backed buffers. `uninit().write(...)` returns
+        // a `&'static mut [u8; 1536]` which coerces to `&'static mut [u8]`.
+        let rx_buf: &'static mut [u8] = MQTT_TCP_RX_CELL.uninit().write([0u8; 1536]);
+        let tx_buf: &'static mut [u8] = MQTT_TCP_TX_CELL.uninit().write([0u8; 1536]);
 
-    let mut socket = TcpSocket::new(stack, rx_buf, tx_buf);
+        let mut socket = TcpSocket::new(stack, rx_buf, tx_buf);
 
-    info!("Resolving MQTT broker host: {}", BROKER_HOST);
-    let port = PORT.parse::<u16>().unwrap_or_else(|_| {
-        info!("Invalid MQTT broker port: {}, defaulting to 1883", PORT);
-        1883
-    });
+        info!("Resolving MQTT broker host: {}", broker_host);
+        let port = port_opt.and_then(|s| s.parse::<u16>().ok()).unwrap_or(1883);
 
-    // Resolve broker host via DNS (A records). Embassy's DNS client is used
-    // here because `TcpSocket::connect` expects an `IpEndpoint`.
-    let dns = DnsSocket::new(stack);
-    match dns.query(BROKER_HOST, DnsQueryType::A).await {
-        Ok(addrs) => {
+        // Resolve broker host via DNS (A records). Embassy's DNS client is used
+        // here because `TcpSocket::connect` expects an `IpEndpoint`.
+        let dns = DnsSocket::new(stack);
+
+        // Use `if let` to avoid a rust-analyzer false positive about a missing
+        // match arm on the awaited future. We log failures without the error
+        // detail to keep the flow simple for the analyzer.
+        let query_res = dns.query(broker_host, DnsQueryType::A).await;
+        if let Ok(addrs) = query_res {
             if let Some(addr) = addrs.first() {
                 let endpoint = IpEndpoint::new(*addr, port);
                 info!("Connecting to MQTT broker: {:?}", endpoint);
@@ -82,12 +86,17 @@ pub async fn mqtt_task(stack: Stack<'static>) {
 
                         let transport = MqttTransport::new(socket);
 
-                        let connect_opts = rust_mqtt::client::options::ConnectOptions::new()
-                            .clean_start()
-                            .user_name(MqttString::from_str_unchecked(MQTT_USERNAME))
-                            .password(MqttBinary::from_bytes_unchecked(
-                                MQTT_PASSWORD.as_bytes().into(),
-                            ));
+                        // Build connect options, applying username/password only when present.
+                        let mut connect_opts =
+                            rust_mqtt::client::options::ConnectOptions::new().clean_start();
+                        if let Some(u) = username_opt {
+                            connect_opts =
+                                connect_opts.user_name(MqttString::from_str_unchecked(u));
+                        }
+                        if let Some(p) = password_opt {
+                            connect_opts = connect_opts
+                                .password(MqttBinary::from_bytes_unchecked(p.as_bytes().into()));
+                        }
 
                         match client.connect(transport, &connect_opts, None).await {
                             Ok(_) => {
@@ -117,10 +126,13 @@ pub async fn mqtt_task(stack: Stack<'static>) {
                     Err(e) => info!("TCP connect failed: {:?}", e),
                 }
             } else {
-                info!("DNS returned no addresses for broker host: {}", BROKER_HOST);
+                info!("DNS returned no addresses for broker host: {}", broker_host);
             }
+        } else {
+            info!("DNS query failed for {}", broker_host);
         }
-        Err(e) => info!("DNS query failed for {}: {:?}", BROKER_HOST, e),
+    } else {
+        info!("MQTT_BROKER_HOST not set; skipping connect");
     }
 
     loop {
