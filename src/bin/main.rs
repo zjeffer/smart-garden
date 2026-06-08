@@ -79,6 +79,7 @@ async fn main(spawner: Spawner) -> ! {
 
     info!("Embassy initialized!");
 
+    // Wi-Fi setup
     let station_config = esp_radio::wifi::Config::Station(
         StationConfig::default()
             .with_ssid(SSID)
@@ -106,7 +107,7 @@ async fn main(spawner: Spawner) -> ! {
         seed,
     );
 
-    // required for one of my esp32's to be able to connect to wifi reliably
+    // required for one of my esp32's to be able to connect to Wi-Fi reliably
     wifi_controller
         .set_max_tx_power(TX_POWER)
         .expect("Failed to set max tx power");
@@ -126,6 +127,10 @@ async fn main(spawner: Spawner) -> ! {
     } else {
         warn!("No IPv4 address configured");
     }
+
+    // spawn mqtt task (placeholder for now)
+    spawner
+        .spawn(garden_esp::mqtt::mqtt_task(stack).expect("Failed to spawn mqtt task"));
 
     // now that we have a connection, start reading the temperature sensor
     let mut data_pin = esp_hal::gpio::Flex::<'static>::new(peripherals.GPIO4);

@@ -33,6 +33,7 @@ esp-bootloader-esp-idf = { version = "0.5.0", features = ["defmt", "esp32c3"] }
 embassy-net = { version = "0.9.1", features = [
   "defmt",
   "dhcpv4",
+  "dns",
   "medium-ethernet",
   "tcp",
   "udp",
@@ -73,6 +74,7 @@ trouble-host = { version = "0.6.0", features = ["gatt"] }
 critical-section = "1.2.0"
 static_cell = "2.1.1"
 onewire = { version = "0.4.0", features = ["defmt"] }
+rust-mqtt = { version = "0.5.1", features = ["defmt", "alloc", "v5"] }
 
 [dev-dependencies]
 embedded-test = { version = "0.7.1", features = [
