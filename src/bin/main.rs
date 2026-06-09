@@ -38,6 +38,7 @@ esp_bootloader_esp_idf::esp_app_desc!();
 const SSID: &str = env!("SSID");
 const PASSWORD: &str = env!("PASSWORD");
 const TX_POWER: i8 = 50; // my esp32c3 doesn't work with the default (whatever that is), 50 works great.
+const COUNTRY_INFO: &str = env!("COUNTRY_INFO");
 
 #[allow(
     clippy::large_stack_frames,
@@ -86,9 +87,14 @@ async fn main(spawner: Spawner) -> ! {
     );
 
     info!("Initializing Wi-Fi controller...");
+    let country_code: [u8; 2] = COUNTRY_INFO.as_bytes()[..2]
+        .try_into()
+        .expect("Invalid country info, expected 2-character country code");
     let (mut wifi_controller, interfaces) = esp_radio::wifi::new(
         peripherals.WIFI,
-        ControllerConfig::default().with_initial_config(station_config),
+        ControllerConfig::default()
+            .with_initial_config(station_config)
+            .with_country_info(esp_radio::wifi::CountryInfo::from(country_code)),
     )
     .expect("Failed to initialize Wi-Fi controller");
     info!("Wi-Fi controller initialized!");

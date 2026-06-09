@@ -28,7 +28,11 @@ use rust_mqtt::types::{MqttString, TopicName};
 static MQTT_TCP_RX_CELL: static_cell::StaticCell<[u8; 1536]> = static_cell::StaticCell::new();
 static MQTT_TCP_TX_CELL: static_cell::StaticCell<[u8; 1536]> = static_cell::StaticCell::new();
 
-const TOPIC_GROUND_TEMPERATURE: &str = "garden/ground_temperature";
+const TOPIC_GROUND_TEMPERATURE: &str = env!("TOPIC_GROUND_TEMPERATURE");
+const BROKER_HOST: &str = env!("MQTT_BROKER_HOST");
+const BROKER_PORT: &str = env!("MQTT_BROKER_PORT");
+const BROKER_USERNAME: &str = env!("MQTT_BROKER_USERNAME");
+const BROKER_PASSWORD: &str = env!("MQTT_BROKER_PASSWORD");
 
 // Use `option_env!` at call sites so these values are optional at compile time.
 
@@ -50,96 +54,87 @@ pub async fn mqtt_task(stack: Stack<'static>) {
     let mut client: Client<'_, MqttTransport<'static>, AllocBuffer, 1, 16, 16, 4> =
         Client::new(&mut buffer);
     let mut connected = false;
-    // Read optional compile-time env vars set via `build.rs` or the environment.
-    let broker_host_opt = option_env!("MQTT_BROKER_HOST");
-    let port_opt = option_env!("MQTT_BROKER_PORT");
-    let username_opt = option_env!("MQTT_BROKER_USERNAME");
-    let password_opt = option_env!("MQTT_BROKER_PASSWORD");
 
-    if let Some(broker_host) = broker_host_opt {
-        // Initialize static cell backed buffers. `uninit().write(...)` returns
-        // a `&'static mut [u8; 1536]` which coerces to `&'static mut [u8]`.
-        let rx_buf: &'static mut [u8] = MQTT_TCP_RX_CELL.uninit().write([0u8; 1536]);
-        let tx_buf: &'static mut [u8] = MQTT_TCP_TX_CELL.uninit().write([0u8; 1536]);
+    // Initialize static cell backed buffers. `uninit().write(...)` returns
+    // a `&'static mut [u8; 1536]` which coerces to `&'static mut [u8]`.
+    let rx_buf: &'static mut [u8] = MQTT_TCP_RX_CELL.uninit().write([0u8; 1536]);
+    let tx_buf: &'static mut [u8] = MQTT_TCP_TX_CELL.uninit().write([0u8; 1536]);
 
-        let mut socket = TcpSocket::new(stack, rx_buf, tx_buf);
+    let mut socket = TcpSocket::new(stack, rx_buf, tx_buf);
 
-        info!("Resolving MQTT broker host: {}", broker_host);
-        let port = port_opt.and_then(|s| s.parse::<u16>().ok()).unwrap_or(1883);
+    info!("Resolving MQTT broker host: {}", BROKER_HOST);
+    let port = BROKER_PORT.parse::<u16>().unwrap_or(1883);
 
-        // Resolve broker host via DNS (A records). Embassy's DNS client is used
-        // here because `TcpSocket::connect` expects an `IpEndpoint`.
-        let dns = DnsSocket::new(stack);
+    // Resolve broker host via DNS (A records). Embassy's DNS client is used
+    // here because `TcpSocket::connect` expects an `IpEndpoint`.
+    let dns = DnsSocket::new(stack);
 
-        // Use `if let` to avoid a rust-analyzer false positive about a missing
-        // match arm on the awaited future. We log failures without the error
-        // detail to keep the flow simple for the analyzer.
-        let query_res = dns.query(broker_host, DnsQueryType::A).await;
-        if let Ok(addrs) = query_res {
-            if let Some(addr) = addrs.first() {
-                let endpoint = IpEndpoint::new(*addr, port);
-                info!("Connecting to MQTT broker: {:?}", endpoint);
+    // Use `if let` to avoid a rust-analyzer false positive about a missing
+    // match arm on the awaited future. We log failures without the error
+    // detail to keep the flow simple for the analyzer.
+    let query_res = dns.query(BROKER_HOST, DnsQueryType::A).await;
+    if let Ok(addrs) = query_res {
+        if let Some(addr) = addrs.first() {
+            let endpoint = IpEndpoint::new(*addr, port);
+            info!("Connecting to MQTT broker: {:?}", endpoint);
 
-                match socket.connect(endpoint).await {
-                    Ok(()) => {
-                        info!("TCP connected to broker");
+            match socket.connect(endpoint).await {
+                Ok(()) => {
+                    info!("TCP connected to broker");
 
-                        let transport = MqttTransport::new(socket);
+                    let transport = MqttTransport::new(socket);
 
-                        // Build connect options, applying username/password only when present.
-                        let mut connect_opts =
-                            rust_mqtt::client::options::ConnectOptions::new().clean_start();
-                        if let Some(u) = username_opt {
-                            connect_opts =
-                                connect_opts.user_name(MqttString::from_str_unchecked(u));
-                        }
-                        if let Some(p) = password_opt {
-                            connect_opts = connect_opts
-                                .password(MqttBinary::from_bytes_unchecked(p.as_bytes().into()));
-                        }
-
-                        match client.connect(transport, &connect_opts, None).await {
-                            Ok(_) => {
-                                info!("MQTT CONNECT succeeded");
-                                connected = true;
-
-                                // publish discovery as retained message
-                                let disc_topic =
-                                    "homeassistant/sensor/esp32c3_ground_temp_001/config";
-                                let disc_topic_name = TopicName::new_unchecked(
-                                    MqttString::from_str_unchecked(disc_topic),
-                                );
-                                let disc_opts =
-                                    PublicationOptions::new(TopicReference::Name(disc_topic_name))
-                                        .retain();
-
-                                let boxed = discovery.into_bytes().into_boxed_slice();
-                                let msg = Bytes::from(boxed);
-                                match client.publish(&disc_opts, msg).await {
-                                    Ok(_) => info!("Published discovery message"),
-                                    Err(e) => info!("Discovery publish failed: {:?}", e),
-                                }
-                            }
-                            Err(e) => info!("MQTT CONNECT failed: {:?}", e),
-                        }
+                    // Build connect options, applying username/password only when present.
+                    let mut connect_opts =
+                        rust_mqtt::client::options::ConnectOptions::new().clean_start();
+                    if !BROKER_USERNAME.is_empty() {
+                        connect_opts =
+                            connect_opts.user_name(MqttString::from_str_unchecked(BROKER_USERNAME));
                     }
-                    Err(e) => info!("TCP connect failed: {:?}", e),
+                    if !BROKER_PASSWORD.is_empty() {
+                        connect_opts = connect_opts.password(MqttBinary::from_bytes_unchecked(
+                            BROKER_PASSWORD.as_bytes().into(),
+                        ));
+                    }
+
+                    match client.connect(transport, &connect_opts, None).await {
+                        Ok(_) => {
+                            info!("MQTT CONNECT succeeded");
+                            connected = true;
+
+                            // publish discovery as retained message
+                            let disc_topic = "homeassistant/sensor/esp32c3_ground_temp_001/config";
+                            let disc_topic_name = TopicName::new_unchecked(
+                                MqttString::from_str_unchecked(disc_topic),
+                            );
+                            let disc_opts =
+                                PublicationOptions::new(TopicReference::Name(disc_topic_name))
+                                    .retain();
+
+                            let boxed = discovery.into_bytes().into_boxed_slice();
+                            let msg = Bytes::from(boxed);
+                            match client.publish(&disc_opts, msg).await {
+                                Ok(_) => info!("Published discovery message"),
+                                Err(e) => info!("Discovery publish failed: {:?}", e),
+                            }
+                        }
+                        Err(e) => info!("MQTT CONNECT failed: {:?}", e),
+                    }
                 }
-            } else {
-                info!("DNS returned no addresses for broker host: {}", broker_host);
+                Err(e) => info!("TCP connect failed: {:?}", e),
             }
         } else {
-            info!("DNS query failed for {}", broker_host);
+            info!("DNS returned no addresses for broker host: {}", BROKER_HOST);
         }
     } else {
-        info!("MQTT_BROKER_HOST not set; skipping connect");
+        info!("DNS query failed for {}", BROKER_HOST);
     }
 
     loop {
         if connected {
             let last = LAST_TEMPERATURE_CENTI.load(Ordering::Relaxed);
             if last != i32::MIN {
-                let temp = (last as f32) / 100.0;
+                let temp = (last as f32) / 100.0; // convert back to degrees
                 let payload = alloc::format!(r#"{{"temperature":{:.2}}}"#, temp);
 
                 // prepare publication options for the telemetry topic

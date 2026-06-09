@@ -95,6 +95,7 @@ fn load_dotenv() {
             match k {
                 "SSID"
                 | "PASSWORD"
+                | "COUNTRY_INFO"
                 | "TOPIC_GROUND_TEMPERATURE"
                 | "MQTT_BROKER_HOST"
                 | "MQTT_BROKER_PORT"
