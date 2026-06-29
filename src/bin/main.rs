@@ -50,7 +50,7 @@ async fn main(spawner: Spawner) -> ! {
     // generator parameters: --chip esp32c3 -o esp32c3-mini-1 -o unstable-hal -o alloc -o wifi -o embassy -o ble-trouble -o probe-rs -o defmt -o panic-rtt-target -o embedded-test -o vscode -o nightly-x86_64-unknown-linux-gnu
 
     rtt_target::rtt_init_defmt!();
-
+    defmt::timestamp!("{=u64:us}", { embassy_time::Instant::now().as_micros() });
     let config = esp_hal::Config::default().with_cpu_clock(CpuClock::max());
     let peripherals = esp_hal::init(config);
 
